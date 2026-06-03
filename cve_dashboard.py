@@ -5,6 +5,14 @@ from datetime import datetime, timedelta
 
 st.set_page_config(page_title="GATR CVE Explorer", layout="wide", page_icon="🛡️")
 
+# =============== GATOR LOGO ===============
+col1, col2 = st.columns([1, 5])
+with col1:
+    st.image("https://i.imgur.com/5eXBb.jpg", width=160)  # Fun Gator Logo
+with col2:
+    st.title("🛡️ GATR Multi-Source CVE Explorer")
+    st.markdown("*Devouring vulnerabilities one byte at a time* 🐊")
+
 # ====================== COMPANY & COUNTRY ======================
 vendor_db = {
     "apache": {"company": "The Apache Software Foundation", "country": "United States"},
@@ -149,7 +157,6 @@ def fetch_vendor_specific(vendor):
         records.append({"Source": "Microsoft MSRC", "CVE ID": "Latest Updates", "Published": datetime.now().strftime("%Y-%m-%d"), "Severity": "HIGH", "Score": None, "Affected Versions": "Various", "Description": "Microsoft Security Response Center", "Link": "https://msrc.microsoft.com/update-guide"})
     elif "oracle" in v:
         records.append({"Source": "Oracle CPU", "CVE ID": "Critical Patch Update", "Published": datetime.now().strftime("%Y-%m-%d"), "Severity": "CRITICAL", "Score": None, "Affected Versions": "Multiple", "Description": "Oracle Security Alerts", "Link": "https://www.oracle.com/security-alerts/"})
-    # Add more vendors as needed
     return pd.DataFrame(records)
 
 # ====================== SIDEBAR ======================
@@ -210,10 +217,8 @@ if source in ["All Sources", "Vendor Specific"]:
 if df_list:
     final_df = pd.concat(df_list, ignore_index=True)
     st.success(f"**{len(final_df)}** vulnerabilities found")
-
     csv = final_df.to_csv(index=False).encode()
     st.download_button("📥 Download CSV", csv, "gatr_cve_export.csv", "text/csv")
-
     st.dataframe(
         final_df,
         use_container_width=True,
