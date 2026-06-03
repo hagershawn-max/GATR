@@ -5,10 +5,21 @@ from bs4 import BeautifulSoup
 from datetime import datetime
 
 st.set_page_config(page_title="GATR Company Info", layout="wide", page_icon="🏢")
-
+# =============== CUSTOM GATOR LOGO ===============
+col1, col2 = st.columns([1, 5])
+with col1:
+    st.image(
+        "https://i.imgur.com/8vKzL9P.png", 
+        width=180,
+        caption="GATR - Devouring Data"
+    )
+with col2:
+    st.title("🛡️ GATR Multi-Source CVE Explorer")
+    st.markdown("*Devouring vulnerabilities one byte at a time* 🐊")
 st.title("🏢 GATR Company & Country Lookup")
 st.markdown("**Vendor Intelligence** with transparent source attribution")
-
+# Rest of your code remains the same...
+# ====================== COMPANY & COUNTRY ======================
 # Local Database
 vendor_db = {
     "apache": {"company": "The Apache Software Foundation", "country": "United States"},
