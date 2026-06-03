@@ -2,12 +2,19 @@ import streamlit as st
 import requests
 import pandas as pd
 from datetime import datetime, timedelta
-from bs4 import BeautifulSoup
+
+# Safe import for BeautifulSoup
+try:
+    from bs4 import BeautifulSoup
+    BS4_AVAILABLE = True
+except ImportError:
+    BS4_AVAILABLE = False
+    st.warning("⚠️ BeautifulSoup not installed. Company lookup will be limited.")
 
 st.set_page_config(page_title="GATR CVE Explorer", layout="wide", page_icon="🛡️")
 
 st.title("🛡️ GATR Multi-Source CVE Explorer")
-st.markdown("**NVD + OSV.dev + GitHub Advisories** • Company & Country Intelligence")
+st.markdown("**NVD + OSV.dev + GitHub** • Company & Country Intelligence")
 
 # ====================== COMPANY & COUNTRY LOOKUP ======================
 
@@ -34,13 +41,12 @@ vendor_db = {
 }
 
 def get_company_info(vendor):
-    """Return company name, country, and source attribution"""
     if not vendor:
         return "N/A", "N/A", "N/A"
     
     v = vendor.lower().strip()
     
-    # Local Database
+    # Local Database (always available)
     info = vendor_db.get(v)
     if info:
         return info["company"], info["country"], "Local Database"
@@ -51,7 +57,10 @@ def get_company_info(vendor):
             info = vendor_db[key]
             return info["company"], info["country"], "Local Database (fuzzy)"
     
-    # Structured Web Scraping Fallback
+    # Web Scraping (only if BeautifulSoup is available)
+    if not BS4_AVAILABLE:
+        return "Unknown", "Unknown", "BS4 Not Installed"
+    
     try:
         query = f"{v} company headquarters country"
         url = f"https://html.duckduckgo.com/html/?q={query.replace(' ', '+')}"
@@ -65,8 +74,7 @@ def get_company_info(vendor):
         country_map = {
             "united states": "United States", "usa": "United States",
             "germany": "Germany", "china": "China",
-            "united kingdom": "United Kingdom", "uk": "United Kingdom",
-            "france": "France", "netherlands": "Netherlands"
+            "united kingdom": "United Kingdom", "uk": "United Kingdom"
         }
         
         country = "Unknown"
@@ -75,7 +83,7 @@ def get_company_info(vendor):
                 country = val
                 break
                 
-        return f"{v.title()} Corporation", country, "Web Scraping (DuckDuckGo)"
+        return f"{v.title()} Corporation", country, "Web Scraping"
     except:
         return "Unknown", "Unknown", "Search Failed"
 
@@ -89,14 +97,8 @@ def extract_versions_nvd(cve):
                 if not match.get("vulnerable"):
                     continue
                 parts = []
-                if match.get("versionStartIncluding"):
-                    parts.append(f">= {match['versionStartIncluding']}")
-                if match.get("versionStartExcluding"):
-                    parts.append(f"> {match['versionStartExcluding']}")
-                if match.get("versionEndIncluding"):
-                    parts.append(f"<= {match['versionEndIncluding']}")
-                if match.get("versionEndExcluding"):
-                    parts.append(f"< {match['versionEndExcluding']}")
+                if match.get("versionStartIncluding"): parts.append(f">= {match['versionStartIncluding']}")
+                if match.get("versionEndIncluding"): parts.append(f"<= {match['versionEndIncluding']}")
                 if parts:
                     versions.append(" ".join(parts))
     return " | ".join(versions[:4]) if versions else "Not specified"
@@ -121,11 +123,7 @@ def fetch_nvd(vendor, software, start_date, end_date, severity_list, api_key=Non
         return pd.DataFrame(), 0
     base_url = "https://services.nvd.nist.gov/rest/json/cves/2.0"
     keyword = f"{vendor} {software}".strip()
-    params = {
-        "keywordSearch": keyword,
-        "resultsPerPage": 50,
-        "startIndex": 0,
-    }
+    params = {"keywordSearch": keyword, "resultsPerPage": 50, "startIndex": 0}
     if start_date and end_date:
         params["pubStartDate"] = f"{start_date}T00:00:00.000"
         params["pubEndDate"] = f"{end_date}T23:59:59.999"
@@ -187,14 +185,10 @@ def fetch_osv(vendor, software, severity_list):
     except:
         return pd.DataFrame()
 
-# ====================== SIDEBAR ======================
+# ====================== SIDEBAR & MAIN LOGIC ======================
 
 st.sidebar.header("🔍 Search Filters")
-source = st.sidebar.selectbox(
-    "Data Source", 
-    ["All Sources", "NIST NVD", "OSV.dev", "GitHub Advisories"],
-    index=0
-)
+source = st.sidebar.selectbox("Data Source", ["All Sources", "NIST NVD", "OSV.dev", "GitHub Advisories"], index=0)
 
 vendor = st.sidebar.text_input("Vendor / Ecosystem", placeholder="apache, microsoft, oracle")
 software = st.sidebar.text_input("Software / Package", placeholder="log4j, openssl, django")
@@ -204,19 +198,15 @@ col1, col2 = st.sidebar.columns(2)
 end_date = col2.date_input("To", datetime.now().date())
 start_date = col1.date_input("From", end_date - timedelta(days=90))
 
-severity = st.sidebar.multiselect(
-    "Severity", ["CRITICAL", "HIGH", "MEDIUM", "LOW"], default=["CRITICAL", "HIGH"]
-)
+severity = st.sidebar.multiselect("Severity", ["CRITICAL", "HIGH", "MEDIUM", "LOW"], default=["CRITICAL", "HIGH"])
 
-results_per_page = st.sidebar.slider("Results per page", 10, 100, 50)
 api_key_nvd = st.sidebar.text_input("NVD API Key (optional)", type="password")
 
-# ====================== MAIN LOGIC ======================
-
+# Main Logic
 df_list = []
 
 if source in ["All Sources", "NIST NVD"]:
-    nvd_df, total = fetch_nvd(vendor, software, start_date, end_date, severity, api_key_nvd)
+    nvd_df, _ = fetch_nvd(vendor, software, start_date, end_date, severity, api_key_nvd)
     if not nvd_df.empty:
         company, country, src = get_company_info(vendor)
         nvd_df["Company"] = company
@@ -237,8 +227,7 @@ if source in ["All Sources", "GitHub Advisories"]:
     try:
         gh_url = "https://api.github.com/advisories"
         params = {"per_page": 30}
-        if software:
-            params["package"] = software
+        if software: params["package"] = software
         gh_r = requests.get(gh_url, headers={"Accept": "application/vnd.github+json"}, params=params, timeout=10)
         if gh_r.status_code == 200:
             gh_data = gh_r.json()
@@ -264,15 +253,13 @@ if source in ["All Sources", "GitHub Advisories"]:
     except:
         pass
 
-# ====================== DISPLAY ======================
-
+# Display
 if df_list:
     final_df = pd.concat(df_list, ignore_index=True)
-    
-    st.success(f"**{len(final_df)}** vulnerabilities found across sources")
+    st.success(f"**{len(final_df)}** vulnerabilities found")
 
     csv = final_df.to_csv(index=False).encode()
-    st.download_button("📥 Download CSV", csv, "cve_export_with_company.csv", "text/csv")
+    st.download_button("📥 Download CSV", csv, "cve_export.csv", "text/csv")
 
     st.dataframe(
         final_df,
@@ -283,14 +270,9 @@ if df_list:
             "Description": st.column_config.TextColumn(width="large"),
             "Company": st.column_config.TextColumn(width="medium"),
             "Country": st.column_config.TextColumn(width="small"),
-            "Info Source": st.column_config.TextColumn(width="small"),
         }
     )
-
-    st.subheader("🔗 Quick Links")
-    for _, row in final_df.iterrows():
-        st.markdown(f"**{row['CVE ID']}** ({row['Source']}) — [View]({row['Link']})")
 else:
-    st.info("👈 Enter **Vendor** and/or **Software** in the sidebar to start searching.")
+    st.info("👈 Enter Vendor and Software to search.")
 
-st.sidebar.caption("Company & Country Intelligence | Local DB + Structured Web Scraping")
+st.sidebar.caption("Company Intelligence Added | Fixed BS4 Import")
