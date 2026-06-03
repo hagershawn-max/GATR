@@ -6,8 +6,7 @@ from datetime import datetime, timedelta
 st.set_page_config(page_title="GATR CVE Explorer", layout="wide", page_icon="🛡️")
 
 # =============== GATOR LOGO ===============
-col2 = st.columns([1, 5])
-with col2:
+
     st.title("🛡️ GATR Multi-Source CVE Explorer")
     st.markdown("*Devouring vulnerabilities one byte at a time* 🐊")
 
