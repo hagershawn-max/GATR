@@ -5,11 +5,6 @@ from datetime import datetime, timedelta
 
 st.set_page_config(page_title="GATR CVE Explorer", layout="wide", page_icon="🛡️")
 
-# =============== GATOR LOGO ===============
-
-    st.title("🛡️ GATR Multi-Source CVE Explorer")
-    st.markdown("*Devouring vulnerabilities one byte at a time* 🐊")
-
 # ====================== COMPANY & COUNTRY ======================
 vendor_db = {
     "apache": {"company": "The Apache Software Foundation", "country": "United States"},
