@@ -6,18 +6,17 @@ from datetime import datetime, timedelta
 st.set_page_config(page_title="GATR CVE Explorer", layout="wide", page_icon="🛡️")
 
 st.title("🛡️ GATR Multi-Source CVE Explorer")
-st.markdown("**NVD + OSV.dev + GitHub Advisories** in one pane")
+st.markdown("**NVD + OSV.dev + GitHub Advisories** with Detailed Version Info")
 
 # Sidebar
 st.sidebar.header("🔍 Search Filters")
-
 source = st.sidebar.selectbox(
-    "Data Source", 
+    "Data Source",
     ["All Sources", "NIST NVD", "OSV.dev", "GitHub Advisories"],
     index=0
 )
 
-vendor = st.sidebar.text_input("Vendor / Ecosystem", placeholder="apache, pypi, npm, microsoft")
+vendor = st.sidebar.text_input("Vendor / Ecosystem", placeholder="apache, PyPI, npm, microsoft")
 software = st.sidebar.text_input("Software / Package", placeholder="log4j, openssl, django")
 
 st.sidebar.subheader("Date Range (NVD only)")
@@ -32,6 +31,8 @@ severity = st.sidebar.multiselect(
 results_per_page = st.sidebar.slider("Results per page", 10, 100, 50)
 api_key_nvd = st.sidebar.text_input("NVD API Key (optional)", type="password")
 
+# ==================== IMPROVED VERSION EXTRACTION ====================
+
 def extract_versions_nvd(cve):
     versions = []
     for config in cve.get("configurations", []):
@@ -42,11 +43,49 @@ def extract_versions_nvd(cve):
                 range_parts = []
                 if match.get("versionStartIncluding"):
                     range_parts.append(f">= {match['versionStartIncluding']}")
+                if match.get("versionStartExcluding"):
+                    range_parts.append(f"> {match['versionStartExcluding']}")
                 if match.get("versionEndIncluding"):
                     range_parts.append(f"<= {match['versionEndIncluding']}")
+                if match.get("versionEndExcluding"):
+                    range_parts.append(f"< {match['versionEndExcluding']}")
                 if range_parts:
                     versions.append(" ".join(range_parts))
-    return " | ".join(versions[:3]) if versions else "Not specified"
+                elif match.get("criteria"):
+                    # Fallback to CPE version
+                    parts = match["criteria"].split(":")
+                    if len(parts) > 5 and parts[5] != "*":
+                        versions.append(parts[5])
+    return " | ".join(versions[:4]) if versions else "Not specified"
+
+def extract_versions_osv(vuln):
+    affected_list = []
+    for affected in vuln.get("affected", []):
+        # Try version ranges first
+        for r in affected.get("ranges", []):
+            for event in r.get("events", []):
+                if "introduced" in event:
+                    affected_list.append(f">= {event['introduced']}")
+                if "fixed" in event:
+                    affected_list.append(f"< {event['fixed']}")
+        
+        # Add specific versions
+        for v in affected.get("versions", [])[:5]:
+            if v not in affected_list:
+                affected_list.append(v)
+    
+    return " | ".join(affected_list[:6]) if affected_list else "Not specified"
+
+def extract_versions_github(adv):
+    versions = []
+    for vuln in adv.get("vulnerabilities", []):
+        if vuln.get("vulnerable_version_range"):
+            versions.append(vuln["vulnerable_version_range"])
+        if vuln.get("package"):
+            versions.append(vuln["package"].get("version", ""))
+    return " | ".join(versions[:4]) if versions else "Not specified"
+
+# ==================== FETCH FUNCTIONS ====================
 
 @st.cache_data(ttl=1200)
 def fetch_nvd(vendor, software, start_date, end_date, severity_list, page=0, api_key=None):
@@ -97,9 +136,9 @@ def fetch_osv(vendor, software, severity_list):
     if not software:
         return pd.DataFrame()
     url = "https://api.osv.dev/v1/query"
-    payload = {
-        "package": {"name": software, "ecosystem": vendor.upper() if vendor else ""}
-    }
+    payload = {"package": {"name": software}}
+    if vendor:
+        payload["package"]["ecosystem"] = vendor.upper()
     try:
         r = requests.post(url, json=payload, timeout=15)
         data = r.json()
@@ -112,7 +151,7 @@ def fetch_osv(vendor, software, severity_list):
                 "Published": vuln.get("published", "")[:10],
                 "Severity": sev,
                 "Score": None,
-                "Affected Versions": ", ".join([v.get("version") for v in vuln.get("affected", [{}])[:3]]),
+                "Affected Versions": extract_versions_osv(vuln),
                 "Description": vuln.get("details", "")[:180] + "...",
                 "Link": f"https://osv.dev/vulnerability/{vuln.get('id')}"
             })
@@ -120,7 +159,8 @@ def fetch_osv(vendor, software, severity_list):
     except:
         return pd.DataFrame()
 
-# Main Logic
+# ==================== MAIN LOGIC ====================
+
 df_list = []
 
 if source in ["All Sources", "NIST NVD"]:
@@ -134,21 +174,25 @@ if source in ["All Sources", "OSV.dev"]:
         df_list.append(osv_df)
 
 if source in ["All Sources", "GitHub Advisories"]:
-    # GitHub basic search (rate limited)
     try:
-        gh_url = f"https://api.github.com/advisories?ecosystem={vendor}&package={software}"
-        gh_r = requests.get(gh_url, headers={"Accept": "application/vnd.github+json"}, timeout=10)
+        gh_url = "https://api.github.com/advisories"
+        params = {"per_page": results_per_page}
+        if software:
+            params["package"] = software
+        if vendor:
+            params["ecosystem"] = vendor
+        gh_r = requests.get(gh_url, headers={"Accept": "application/vnd.github+json"}, params=params, timeout=10)
         if gh_r.status_code == 200:
             gh_data = gh_r.json()
             gh_records = []
-            for adv in gh_data[:results_per_page]:
+            for adv in gh_data:
                 gh_records.append({
                     "Source": "GitHub",
                     "CVE ID": adv.get("cve_id") or adv.get("ghsa_id"),
                     "Published": adv.get("published_at", "")[:10],
                     "Severity": adv.get("severity", "UNKNOWN").upper(),
                     "Score": None,
-                    "Affected Versions": str(adv.get("vulnerabilities", [{}])[0].get("vulnerable_version_range", "")),
+                    "Affected Versions": extract_versions_github(adv),
                     "Description": adv.get("summary", "")[:180],
                     "Link": adv.get("html_url")
                 })
@@ -162,13 +206,17 @@ if df_list:
     st.success(f"**{len(final_df)}** vulnerabilities found across sources")
 
     csv = final_df.to_csv(index=False).encode()
-    st.download_button("📥 Download CSV", csv, "multi_source_cve_export.csv", "text/csv")
+    st.download_button("📥 Download CSV", csv, "cve_export.csv", "text/csv")
 
     st.dataframe(
         final_df,
         use_container_width=True,
         hide_index=True,
-        column_config={"Description": st.column_config.TextColumn(width="large")}
+        column_config={
+            "Affected Versions": st.column_config.TextColumn(width="medium"),
+            "Description": st.column_config.TextColumn(width="large"),
+            "Score": st.column_config.NumberColumn(format="%.1f"),
+        }
     )
 
     st.subheader("🔗 Quick Links")
@@ -177,4 +225,4 @@ if df_list:
 else:
     st.info("Enter search terms above. Try: Vendor=`apache`, Software=`log4j`")
 
-st.sidebar.caption("Multi-source aggregator • OSV.dev + NVD + GitHub")
+st.sidebar.caption("Enhanced Version Information • Multi-Source CVE Aggregator")
