@@ -1,80 +1,108 @@
 import streamlit as st
 import pandas as pd
 import requests
+from bs4 import BeautifulSoup
 from datetime import datetime
 
 st.set_page_config(page_title="GATR Company Info", layout="wide", page_icon="🏢")
 
 st.title("🏢 GATR Company & Country Lookup")
-st.markdown("**Software Vendor → Owning Company + Headquarters Country** (with web search fallback)")
+st.markdown("**Vendor Intelligence** with transparent source attribution")
 
-# Local Database (fast lookup)
+# Local Database
 vendor_db = {
     "apache": {"company": "The Apache Software Foundation", "country": "United States"},
     "microsoft": {"company": "Microsoft Corporation", "country": "United States"},
     "oracle": {"company": "Oracle Corporation", "country": "United States"},
     "google": {"company": "Google LLC", "country": "United States"},
-    "amazon": {"company": "Amazon Web Services", "country": "United States"},
+    "amazon": {"company": "Amazon.com, Inc.", "country": "United States"},
     "redhat": {"company": "Red Hat, Inc.", "country": "United States"},
     "ibm": {"company": "IBM", "country": "United States"},
     "cisco": {"company": "Cisco Systems", "country": "United States"},
     "apple": {"company": "Apple Inc.", "country": "United States"},
     "intel": {"company": "Intel Corporation", "country": "United States"},
     "canonical": {"company": "Canonical Ltd.", "country": "United Kingdom"},
-    "docker": {"company": "Docker, Inc.", "country": "United States"},
     "nginx": {"company": "F5, Inc.", "country": "United States"},
     "wordpress": {"company": "Automattic", "country": "United States"},
     "mozilla": {"company": "Mozilla Foundation", "country": "United States"},
     "sap": {"company": "SAP SE", "country": "Germany"},
-    "huawei": {"company": "Huawei Technologies", "country": "China"},
+    "huawei": {"company": "Huawei Technologies Co., Ltd.", "country": "China"},
     "alibaba": {"company": "Alibaba Group", "country": "China"},
-    "vmware": {"company": "VMware (Broadcom)", "country": "United States"},
+    "vmware": {"company": "VMware, Inc.", "country": "United States"},
+    "docker": {"company": "Docker, Inc.", "country": "United States"},
 }
 
-def web_search_company(vendor):
-    """Fallback: Search the web for company and country"""
+def structured_web_scrape(vendor):
+    """Structured scraping with clear source attribution"""
+    result = {
+        "company": "Unknown",
+        "country": "Unknown",
+        "source": "Web Search",
+        "attribution": "DuckDuckGo + Wikipedia"
+    }
+    
     try:
-        query = f"{vendor} software company headquarters country owner"
-        # Using DuckDuckGo HTML search (no API key needed)
+        query = f"{vendor} company headquarters country"
         url = f"https://html.duckduckgo.com/html/?q={query.replace(' ', '+')}"
-        headers = {"User-Agent": "Mozilla/5.0"}
-        response = requests.get(url, headers=headers, timeout=10)
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
         
-        text = response.text.lower()
+        resp = requests.get(url, headers=headers, timeout=12)
+        soup = BeautifulSoup(resp.text, 'html.parser')
         
-        company = "Unknown"
-        country = "Unknown"
+        snippets = [s.get_text() for s in soup.find_all(['a', 'div']) if s.get_text()]
+        text_block = " ".join(snippets[:8]).lower()
         
-        # Simple keyword extraction
-        if "united states" in text or "u.s." in text or "usa" in text:
-            country = "United States"
-        elif "china" in text:
-            country = "China"
-        elif "germany" in text:
-            country = "Germany"
-        elif "united kingdom" in text or "uk" in text:
-            country = "United Kingdom"
-        elif "russia" in text:
-            country = "Russia"
-        elif "france" in text:
-            country = "France"
+        # Country detection
+        country_map = {
+            "united states": "United States", "usa": "United States", "u.s.": "United States",
+            "united kingdom": "United Kingdom", "uk": "United Kingdom",
+            "germany": "Germany", "china": "China", "france": "France",
+            "netherlands": "Netherlands", "canada": "Canada", "india": "India"
+        }
         
-        # Try to extract company name
-        if "inc." in text or "corporation" in text or "llc" in text:
-            company = vendor.title() + " Corporation"  # fallback
+        for key, full_name in country_map.items():
+            if key in text_block:
+                result["country"] = full_name
+                break
         
-        return {"company": company, "country": country}
-    except:
-        return {"company": "Search failed", "country": "Unknown"}
+        # Company name
+        title_tag = soup.find('a', class_='result__a')
+        if title_tag:
+            result["company"] = title_tag.get_text(strip=True)[:90]
+        
+        # Wikipedia fallback for higher quality
+        if result["country"] == "Unknown":
+            try:
+                wiki_url = f"https://en.wikipedia.org/wiki/{vendor.replace(' ', '_')}"
+                wiki_resp = requests.get(wiki_url, headers=headers, timeout=8)
+                if wiki_resp.status_code == 200:
+                    wiki_soup = BeautifulSoup(wiki_resp.text, 'html.parser')
+                    infobox = wiki_soup.find('table', {'class': 'infobox'})
+                    if infobox:
+                        wiki_text = infobox.get_text().lower()
+                        for key, full_name in country_map.items():
+                            if key in wiki_text:
+                                result["country"] = full_name
+                                result["source"] = "Wikipedia"
+                                result["attribution"] = "Wikipedia Infobox"
+                                break
+                        result["company"] = vendor.title()
+            except:
+                pass
+                
+    except Exception as e:
+        result["company"] = "Search Error"
+        result["attribution"] = f"Error: {str(e)[:60]}"
+    
+    return result
 
 # Sidebar
-st.sidebar.header("🔍 Search Vendor")
-search_term = st.sidebar.text_input("Vendor / Software Name", placeholder="apache, nginx, log4j...").strip().lower()
+st.sidebar.header("🔍 Search")
+search_term = st.sidebar.text_input("Vendor / Software Name", placeholder="apache, huawei, nginx, gimp...").strip().lower()
 
 if search_term:
+    # Check local database first
     info = vendor_db.get(search_term)
-    
-    # Try fuzzy match in local DB
     if not info:
         for key in vendor_db:
             if key in search_term or search_term in key:
@@ -82,33 +110,34 @@ if search_term:
                 break
 
     if info:
-        st.success("✅ Found in local database")
-        col1, col2 = st.columns(2)
+        st.success("✅ Found in **Local Database**")
+        col1, col2, col3 = st.columns([1, 2, 2])
         with col1:
             st.metric("Vendor", search_term.upper())
         with col2:
-            st.metric("Owning Company", info["company"])
+            st.metric("Company", info["company"])
+        with col3:
             st.metric("Headquarters", info["country"])
+        st.caption("**Source**: Built-in Local Database")
     else:
-        st.warning(f"**{search_term}** not in local database. Searching the web...")
-        with st.spinner("Performing web search..."):
-            info = web_search_company(search_term)
+        st.info(f"🔍 Searching web for **{search_term}**...")
+        with st.spinner("Performing structured web scrape..."):
+            info = structured_web_scrape(search_term)
         
-        if info["country"] != "Unknown":
-            st.success("✅ Found via Web Search")
-            col1, col2 = st.columns(2)
-            with col1:
-                st.metric("Vendor", search_term.upper())
-            with col2:
-                st.metric("Owning Company", info["company"])
-                st.metric("Headquarters", info["country"])
-        else:
-            st.error("Could not find reliable information.")
+        col1, col2, col3 = st.columns([1, 2, 2])
+        with col1:
+            st.metric("Vendor", search_term.upper())
+        with col2:
+            st.metric("Company", info["company"])
+        with col3:
+            st.metric("Headquarters", info["country"])
+        
+        st.caption(f"**Source**: {info['source']} • {info['attribution']}")
 
-# Display full local database
+# Database Table
 st.subheader("📋 Local Vendor Database")
 df = pd.DataFrame.from_dict(vendor_db, orient='index')
 df.index.name = "Vendor"
 st.dataframe(df, use_container_width=True)
 
-st.caption("💡 If not found locally, the app automatically searches the web.")
+st.caption("💡 Priority: Local Database → Structured Web Scraping (DuckDuckGo + Wikipedia)")
