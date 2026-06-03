@@ -5,8 +5,13 @@ from datetime import datetime, timedelta
 
 st.set_page_config(page_title="GATR CVE Explorer", layout="wide", page_icon="🛡️")
 
-st.title("🛡️ GATR Multi-Source CVE Explorer")
-st.markdown("**All Major Open-Source + Vendor-Specific CVE Databases**")
+# =============== GATOR LOGO ===============
+col_logo, col_title = st.columns([1, 5])
+with col_logo:
+    st.image("https://i.imgur.com/5eXBb.jpg", width=140)  # Gator eating software
+with col_title:
+    st.title("🛡️ GATR Multi-Source CVE Explorer")
+    st.markdown("*Devouring vulnerabilities one byte at a time* 🐊")
 
 # ====================== COMPANY & COUNTRY ======================
 vendor_db = {
@@ -25,7 +30,8 @@ vendor_db = {
 }
 
 def get_company_info(vendor):
-    if not vendor: return "N/A", "N/A", "N/A"
+    if not vendor:
+        return "N/A", "N/A", "N/A"
     v = vendor.lower().strip()
     info = vendor_db.get(v)
     if info:
@@ -36,79 +42,34 @@ def get_company_info(vendor):
             return info["company"], info["country"], "Local DB"
     return "Unknown", "Unknown", "Not Found"
 
-# ====================== VENDOR-SPECIFIC SEARCH ======================
-def fetch_vendor_specific(vendor):
-    """Search official vendor CVE databases"""
-    v = vendor.lower().strip()
-    records = []
-    
-    try:
-        if "microsoft" in v:
-            # Microsoft Security Response Center
-            url = "https://api.msrc.microsoft.com/cvrf/v3.0"
-            r = requests.get(url, timeout=10)
-            if r.status_code == 200:
-                data = r.json()
-                for item in data.get("CVRFs", [])[:15]:
-                    records.append({
-                        "Source": "Microsoft MSRC",
-                        "CVE ID": item.get("cveNumber", "N/A"),
-                        "Published": item.get("publishedDate", "")[:10],
-                        "Severity": item.get("severity", "HIGH"),
-                        "Description": item.get("title", "")[:180],
-                        "Link": f"https://msrc.microsoft.com/update-guide/vulnerability/{item.get('cveNumber')}"
-                    })
-        
-        elif "oracle" in v:
-            records.append({
-                "Source": "Oracle Security",
-                "CVE ID": "See Oracle Advisory",
-                "Published": datetime.now().strftime("%Y-%m-%d"),
-                "Severity": "HIGH",
-                "Description": "Check Oracle Critical Patch Updates",
-                "Link": "https://www.oracle.com/security-alerts/"
-            })
-        
-        elif "cisco" in v:
-            records.append({
-                "Source": "Cisco PSIRT",
-                "CVE ID": "See Cisco Advisory",
-                "Published": datetime.now().strftime("%Y-%m-%d"),
-                "Severity": "HIGH",
-                "Description": "Cisco Security Advisories",
-                "Link": "https://sec.cloudapps.cisco.com/security/center/publicationListing.x"
-            })
-        
-        elif "redhat" in v:
-            records.append({
-                "Source": "Red Hat Security",
-                "CVE ID": "See RHSA",
-                "Published": datetime.now().strftime("%Y-%m-%d"),
-                "Severity": "HIGH",
-                "Description": "Red Hat Security Advisories",
-                "Link": "https://access.redhat.com/security/updates/advisory"
-            })
-        
-        elif "apple" in v:
-            records.append({
-                "Source": "Apple Security",
-                "CVE ID": "See Apple Security Updates",
-                "Published": datetime.now().strftime("%Y-%m-%d"),
-                "Severity": "HIGH",
-                "Description": "Apple Product Security Updates",
-                "Link": "https://support.apple.com/en-us/HT201222"
-            })
-    except:
-        pass
-    
-    return pd.DataFrame(records)
+# ====================== VERSION HELPERS ======================
+def extract_versions_nvd(cve):
+    versions = []
+    for config in cve.get("configurations", []):
+        for node in config.get("nodes", []):
+            for match in node.get("cpeMatch", []):
+                if not match.get("vulnerable"): continue
+                parts = []
+                if match.get("versionStartIncluding"): parts.append(f">= {match['versionStartIncluding']}")
+                if match.get("versionEndIncluding"): parts.append(f"<= {match['versionEndIncluding']}")
+                if parts: versions.append(" ".join(parts))
+    return " | ".join(versions[:4]) if versions else "Not specified"
 
-# ====================== OTHER FETCH FUNCTIONS (NVD, OSV, etc.) ======================
-# [Previous fetch_nvd, fetch_osv, fetch_cisa_kev functions remain the same]
+def extract_versions_osv(vuln):
+    affected = []
+    for item in vuln.get("affected", []):
+        for r in item.get("ranges", []):
+            for event in r.get("events", []):
+                if "introduced" in event: affected.append(f">= {event['introduced']}")
+                if "fixed" in event: affected.append(f"< {event['fixed']}")
+        affected.extend(item.get("versions", [])[:5])
+    return " | ".join(affected[:6]) if affected else "Not specified"
 
+# ====================== FETCH FUNCTIONS ======================
 @st.cache_data(ttl=1200)
 def fetch_nvd(vendor, software, start_date, end_date, severity_list, api_key=None):
-    if not vendor and not software: return pd.DataFrame(), 0
+    if not vendor and not software:
+        return pd.DataFrame(), 0
     base_url = "https://services.nvd.nist.gov/rest/json/cves/2.0"
     keyword = f"{vendor} {software}".strip()
     params = {"keywordSearch": keyword, "resultsPerPage": 50, "startIndex": 0}
@@ -133,7 +94,7 @@ def fetch_nvd(vendor, software, start_date, end_date, severity_list, api_key=Non
                 "Published": cve.get("published", "")[:10],
                 "Severity": sev,
                 "Score": score,
-                "Affected Versions": "See Details",
+                "Affected Versions": extract_versions_nvd(cve),
                 "Description": cve["descriptions"][0]["value"][:180] + "..." if cve.get("descriptions") else "N/A",
                 "Link": f"https://nvd.nist.gov/vuln/detail/{cve['id']}"
             })
@@ -141,17 +102,80 @@ def fetch_nvd(vendor, software, start_date, end_date, severity_list, api_key=Non
     except:
         return pd.DataFrame(), 0
 
-# ====================== SIDEBAR & MAIN ======================
-st.sidebar.header("🔍 Search Filters")
-source = st.sidebar.selectbox("Data Source", 
-    ["All Sources", "NIST NVD", "OSV.dev", "GitHub Advisories", "CISA KEV", "Vendor Specific"], index=0)
+@st.cache_data(ttl=1800)
+def fetch_osv(vendor, software, severity_list):
+    if not software: return pd.DataFrame()
+    url = "https://api.osv.dev/v1/query"
+    payload = {"package": {"name": software}}
+    if vendor: payload["package"]["ecosystem"] = vendor.upper()
+    try:
+        r = requests.post(url, json=payload, timeout=15)
+        data = r.json()
+        records = []
+        for vuln in data.get("vulns", []):
+            sev = vuln.get("database_specific", {}).get("severity", "UNKNOWN")
+            records.append({
+                "Source": "OSV.dev",
+                "CVE ID": vuln.get("id"),
+                "Published": vuln.get("published", "")[:10],
+                "Severity": sev,
+                "Score": None,
+                "Affected Versions": extract_versions_osv(vuln),
+                "Description": vuln.get("details", "")[:180] + "...",
+                "Link": f"https://osv.dev/vulnerability/{vuln.get('id')}"
+            })
+        return pd.DataFrame(records)
+    except:
+        return pd.DataFrame()
 
-vendor = st.sidebar.text_input("Vendor / Ecosystem", placeholder="microsoft, oracle, cisco, apache")
+@st.cache_data(ttl=3600)
+def fetch_cisa_kev():
+    try:
+        url = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
+        r = requests.get(url, timeout=15)
+        data = r.json()
+        records = []
+        for item in data.get("vulnerabilities", []):
+            records.append({
+                "Source": "CISA KEV",
+                "CVE ID": item.get("cveID"),
+                "Published": item.get("dateAdded", "")[:10],
+                "Severity": "HIGH (Exploited)",
+                "Score": None,
+                "Affected Versions": "Exploited in Wild",
+                "Description": item.get("shortDescription", "")[:180],
+                "Link": f"https://nvd.nist.gov/vuln/detail/{item.get('cveID')}"
+            })
+        return pd.DataFrame(records)
+    except:
+        return pd.DataFrame()
+
+def fetch_vendor_specific(vendor):
+    v = vendor.lower().strip() if vendor else ""
+    records = []
+    if "microsoft" in v:
+        records.append({"Source": "Microsoft MSRC", "CVE ID": "Latest Updates", "Published": datetime.now().strftime("%Y-%m-%d"), "Severity": "HIGH", "Score": None, "Affected Versions": "Various", "Description": "Microsoft Security Response Center", "Link": "https://msrc.microsoft.com/update-guide"})
+    elif "oracle" in v:
+        records.append({"Source": "Oracle CPU", "CVE ID": "Critical Patch Update", "Published": datetime.now().strftime("%Y-%m-%d"), "Severity": "CRITICAL", "Score": None, "Affected Versions": "Multiple", "Description": "Oracle Security Alerts", "Link": "https://www.oracle.com/security-alerts/"})
+    # Add more vendors as needed
+    return pd.DataFrame(records)
+
+# ====================== SIDEBAR ======================
+st.sidebar.header("🔍 Search Filters")
+source = st.sidebar.selectbox("Data Source", ["All Sources", "NIST NVD", "OSV.dev", "CISA KEV", "Vendor Specific"], index=0)
+
+vendor = st.sidebar.text_input("Vendor / Ecosystem", placeholder="microsoft, oracle, apache")
 software = st.sidebar.text_input("Software / Package", placeholder="windows, log4j, openssl")
 
-# ... (Date, Severity, API Key inputs remain the same)
+st.sidebar.subheader("Date Range (NVD only)")
+col1, col2 = st.sidebar.columns(2)
+end_date = col2.date_input("To", datetime.now().date())
+start_date = col1.date_input("From", end_date - timedelta(days=90))
 
-# Main Logic
+severity = st.sidebar.multiselect("Severity", ["CRITICAL", "HIGH", "MEDIUM", "LOW"], default=["CRITICAL", "HIGH"])
+api_key_nvd = st.sidebar.text_input("NVD API Key (optional)", type="password")
+
+# ====================== MAIN LOGIC ======================
 df_list = []
 
 if source in ["All Sources", "NIST NVD"]:
@@ -163,7 +187,25 @@ if source in ["All Sources", "NIST NVD"]:
         nvd_df["Info Source"] = src
         df_list.append(nvd_df)
 
-if source in ["All Sources", "Vendor Specific"] or source == "All Sources":
+if source in ["All Sources", "OSV.dev"]:
+    osv_df = fetch_osv(vendor, software, severity)
+    if not osv_df.empty:
+        company, country, src = get_company_info(vendor)
+        osv_df["Company"] = company
+        osv_df["Country"] = country
+        osv_df["Info Source"] = src
+        df_list.append(osv_df)
+
+if source in ["All Sources", "CISA KEV"]:
+    kev_df = fetch_cisa_kev()
+    if not kev_df.empty:
+        company, country, src = get_company_info(vendor)
+        kev_df["Company"] = company
+        kev_df["Country"] = country
+        kev_df["Info Source"] = src
+        df_list.append(kev_df)
+
+if source in ["All Sources", "Vendor Specific"]:
     vendor_df = fetch_vendor_specific(vendor)
     if not vendor_df.empty:
         company, country, src = get_company_info(vendor)
@@ -172,12 +214,26 @@ if source in ["All Sources", "Vendor Specific"] or source == "All Sources":
         vendor_df["Info Source"] = src
         df_list.append(vendor_df)
 
-# ... (Add OSV, GitHub, CISA KEV similarly as before)
-
-# Display Section (same as previous)
+# ====================== DISPLAY ======================
 if df_list:
     final_df = pd.concat(df_list, ignore_index=True)
-    st.success(f"**{len(final_df)}** vulnerabilities found (including vendor-specific)")
-    # ... rest of display code
+    st.success(f"**{len(final_df)}** vulnerabilities found")
+
+    csv = final_df.to_csv(index=False).encode()
+    st.download_button("📥 Download CSV", csv, "gatr_cve_export.csv", "text/csv")
+
+    st.dataframe(
+        final_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Affected Versions": st.column_config.TextColumn(width="medium"),
+            "Description": st.column_config.TextColumn(width="large"),
+            "Company": st.column_config.TextColumn(width="medium"),
+            "Country": st.column_config.TextColumn(width="small"),
+        }
+    )
 else:
-    st.info("Enter a major vendor (e.g. microsoft, oracle, cisco) to search their official database.")
+    st.info("👈 Enter Vendor and/or Software to begin searching.")
+
+st.sidebar.caption("🐊 GATR CVE Dashboard")
