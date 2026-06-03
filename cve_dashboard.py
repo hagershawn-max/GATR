@@ -6,12 +6,8 @@ from datetime import datetime, timedelta
 st.set_page_config(page_title="GATR CVE Explorer", layout="wide", page_icon="🛡️")
 
 # =============== GATOR LOGO ===============
-col1, col2 = st.columns([1, 5])
 with col1:
-    st.image("https://i.imgur.com/5eXBb.jpg", width=160)  # Fun Gator Logo
-with col2:
-    st.title("🛡️ GATR Multi-Source CVE Explorer")
-    st.markdown("*Devouring vulnerabilities one byte at a time* 🐊")
+    st.image("https://cdn-icons-png.flaticon.com/512/415/415662.png", width=140)  # Alligator icon
 
 # ====================== COMPANY & COUNTRY ======================
 vendor_db = {
